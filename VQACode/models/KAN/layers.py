@@ -132,6 +132,43 @@ class Encoder(tf.keras.layers.Layer):
 
         return x  # (batch_size, input_seq_len, d_model)
 
+class Decoder(tf.keras.layers.Layer):
+    def __init__(self, num_layers, d_model, num_heads, dff, target_vocab_size,
+                 maximum_position_encoding, rate=0.1):
+        super(Decoder, self).__init__()
+
+        self.d_model = d_model
+        self.num_layers = num_layers
+
+        self.embedding = tf.keras.layers.Embedding(target_vocab_size, d_model)
+        self.context_dense = tf.keras.layers.Dense(d_model)
+        self.pos_encoding = positional_encoding(maximum_position_encoding, d_model)
+
+        self.dec_layers = [DecoderLayer(d_model, num_heads, dff, rate)
+                           for _ in range(num_layers)]
+        self.dropout = tf.keras.layers.Dropout(rate)
+
+    def call(self, x, enc_output, training,
+             look_ahead_mask, padding_mask):
+        seq_len = tf.shape(x)[1]
+        attention_weights = {}
+
+        x = self.embedding(x)
+        x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
+        x += self.pos_encoding[:, :seq_len, :]
+
+        x = self.dropout(x, training=training)
+
+        for i in range(self.num_layers):
+            x, block1, block2 = self.dec_layers[i](x, enc_output, training,
+                                                   look_ahead_mask, padding_mask)
+
+        attention_weights['decoder_layer{}_block1'.format(i + 1)] = block1
+        attention_weights['decoder_layer{}_block2'.format(i + 1)] = block2
+
+        # x.shape == (batch_size, target_seq_len, d_model)
+        return x, attention_weights
+        
 class IEAM(tf.keras.layers.Layer):
     def __init__(self, num_layers, d_model, num_heads, dff, 
                  maximum_position_encoding, rate=0.1, pretrained_cnn_type='inception'):
@@ -140,7 +177,7 @@ class IEAM(tf.keras.layers.Layer):
         self.d_model = d_model
         self.num_layers = num_layers
         # self.maximum_position_encoding = maximum_position_encoding
-        self.pos_encoding = positional_encoding(64, d_model)
+        self.pos_encoding = positional_encoding(49, d_model)
         self.pretrained_CNN = pretrained_cnn(pretrained_cnn_type)
         self.conv = tf.keras.layers.Conv2D(1024, 3, padding='same', activation='relu')
         # self.fc1 = Dense(maximum_position_encoding * 10)
@@ -163,7 +200,7 @@ class IEAM(tf.keras.layers.Layer):
         # img_feature = tf.keras.layers.Reshape((self.maximum_position_encoding, -1))(img_feature) # (64, 38, 490)
         img_feature = self.image_dense(img_feature)  # (64, 49, 512)
         # 
-        img_feature += self.pos_encoding[:, :64, :]
+        img_feature += self.pos_encoding[:, :49, :]
         x = self.dropout(img_feature, training=training)
         # print(x.shape)
         for i in range(self.num_layers):
@@ -176,13 +213,14 @@ class IEAM(tf.keras.layers.Layer):
 
 class KEAM(tf.keras.layers.Layer):
     def __init__(self, num_layers, d_model, num_heads, dff, 
-                 maximum_position_encoding, rate=0.1):
+                 maximum_position_encoding, kn_input, rate=0.1):
         super(KEAM, self).__init__()
 
         self.d_model = d_model
         self.num_layers = num_layers
+        self.kn_input = kn_input
         # self.maximum_position_encoding = maximum_position_encoding
-        self.pos_encoding = positional_encoding(194, d_model)
+        self.pos_encoding = positional_encoding(kn_input, d_model)
         # self.fc1 = Dense(maximum_position_encoding * 10)
         self.kn_dense = Dense(d_model, activation='relu')
 
@@ -199,7 +237,7 @@ class KEAM(tf.keras.layers.Layer):
         # kn_feature = tf.transpose(kn_feature, perm=(0, 2, 1))  # (64, 380, 155)
         # kn_feature = tf.keras.layers.Reshape((self.maximum_position_encoding, -1))(kn_feature) # (64, 38, 1550)
         kn_feature = self.kn_dense(kn)  # (64, 155, 512)
-        kn_feature += self.pos_encoding[:, :194, :]
+        kn_feature += self.pos_encoding[:, :self.kn_input, :]
         x = self.dropout(kn_feature, training=training)
         for i in range(self.num_layers):
             x, block1, block2 = self.dec_layers[i](x, enc_output, training, kn_padding_mask, padding_mask)

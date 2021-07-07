@@ -135,8 +135,7 @@ class Encoder(tf.keras.layers.Layer):
 
         # self.embedding = tf.keras.layers.Embedding(input_vocab_size, d_model)
         self.question_dense = tf.keras.layers.Dense(d_model)
-        self.pos_encoding = positional_encoding(maximum_position_encoding,
-                                                self.d_model)
+        self.pos_encoding = positional_encoding(maximum_position_encoding, self.d_model)
 
         self.enc_layers = [EncoderLayer(d_model, num_heads, dff, rate)
                            for _ in range(num_layers)]
@@ -161,19 +160,22 @@ class Encoder(tf.keras.layers.Layer):
 
 class CoAttEncoder(tf.keras.layers.Layer):
     def __init__(self, num_layers, d_model, num_heads, dff,
-                 maximum_position_encoding, pretrained_cnn_type, rate=0.1):
+                 maximum_position_encoding, pretrained_cnn_type, rate=0.1, multiplier=10):
         super(CoAttEncoder, self).__init__()
 
         self.d_model = d_model
         self.num_layers = num_layers
+        self.maximum_position_encoding = maximum_position_encoding
 
         # self.embedding = tf.keras.layers.Embedding(input_vocab_size, d_model)
+        self.bilstm = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(512, return_sequences=True))
         self.question_dense = tf.keras.layers.Dense(d_model)
         self.pos_encoding = positional_encoding(maximum_position_encoding,
                                                 self.d_model)
         self.pretrained_CNN = pretrained_cnn(pretrained_cnn_type)
         self.conv = tf.keras.layers.Conv2D(1024, 3, padding='same', activation='relu')
         self.image_dense = Dense(d_model, activation='relu')
+        self.fc1 = Dense(maximum_position_encoding * multiplier)
 
         self.img_enc_layers = [EncoderLayer(d_model, num_heads, dff, rate)
                            for _ in range(num_layers)]
@@ -187,6 +189,7 @@ class CoAttEncoder(tf.keras.layers.Layer):
         # question
         seq_len = tf.shape(question)[1]
         # adding embedding and position encoding.
+        question = self.bilstm(question)
         question = self.question_dense(question)  # (batch_size, input_seq_len, d_model)
         question *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         question += self.pos_encoding[:, :seq_len, :]
@@ -198,50 +201,22 @@ class CoAttEncoder(tf.keras.layers.Layer):
         img_feature = self.conv(img_feature)   # (64, 7, 7, 1024)
         img_shape = img_feature.shape[-1]     
         img_feature = tf.keras.layers.Reshape((-1, img_shape))(img_feature)  # (64, 49, 1024)
-        img_feature = self.image_dense(img_feature) # (64, 49, d_model)
-        img = self.img_dropout(img_feature, training=training)
+        img_feature = self.fc1(img_feature)  # (64, 49, 380)
+        img_feature = tf.transpose(img_feature, perm=(0, 2, 1))  # (64, 380, 49)
+        img_feature = tf.keras.layers.Reshape((self.maximum_position_encoding, -1))(img_feature) # (64, 38, 490)
+        img_feature = self.image_dense(img_feature) # (64, 38, d_model)
 
+        img = self.img_dropout(img_feature, training=training)
+        
+        
         for i in range(self.num_layers):
             temp_img = img
             temp_qus = question
             img = self.img_enc_layers[i](temp_img, temp_qus, training, mask)
             question = self.qus_enc_layers[i](temp_qus, temp_img, training, None)
 
+
         return question, img  # (batch_size, input_seq_len, d_model)
-
-
-class BC_Encoder(tf.keras.layers.Layer):
-    def __init__(self, num_layers, d_model, num_heads, dff,
-                 maximum_position_encoding, rate=0.1):
-        super(BC_Encoder, self).__init__()
-
-        self.d_model = d_model
-        self.num_layers = num_layers
-
-        self.question_dense = tf.keras.layers.Dense(d_model)
-        self.pos_encoding = positional_encoding(maximum_position_encoding,
-                                                self.d_model)
-
-        self.enc_layers = [BC_EncoderLayer(d_model, num_heads, dff, rate)
-                           for _ in range(num_layers)]
-
-        self.dropout = tf.keras.layers.Dropout(rate)
-
-    def call(self, x, training=True):
-        seq_len = tf.shape(x)[1]
-
-        # 将嵌入和位置编码相加。
-        x = self.question_dense(x)  # (batch_size, input_seq_len, d_model)
-        x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
-        x += self.pos_encoding[:, :seq_len, :]
-
-        x = self.dropout(x, training=training)
-
-        for i in range(self.num_layers):
-            x = self.enc_layers[i](x, training)
-
-        return x  # (batch_size, input_seq_len, d_model)
-
 
 class Decoder(tf.keras.layers.Layer):
     def __init__(self, num_layers, d_model, num_heads, dff, target_vocab_size,

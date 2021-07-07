@@ -50,7 +50,7 @@ class EncoderLayer(tf.keras.layers.Layer):
         self.dropout2 = tf.keras.layers.Dropout(rate)
 
     def call(self, question, img, training, mask):
-        attn_output, attn_weights_block = self.mha(img, question, question, mask)  # (batch_size, input_seq_len, d_model)
+        attn_output, _ = self.mha(img, question, question, mask)  # (batch_size, input_seq_len, d_model)
         attn_output = self.dropout1(attn_output, training=training)
         # print('attn_output', attn_output.shape)
         # print('question', question.shape)
@@ -60,7 +60,7 @@ class EncoderLayer(tf.keras.layers.Layer):
         ffn_output = self.dropout2(ffn_output, training=training)
         out2 = self.layernorm2(out1 + ffn_output)  # (batch_size, input_seq_len, d_model)
 
-        return out2, attn_weights_block
+        return out2
 
 
 class BC_EncoderLayer(tf.keras.layers.Layer):
@@ -154,74 +154,12 @@ class Encoder(tf.keras.layers.Layer):
 
         x = self.dropout(x, training=training)
 
-        attention_weights = {}
-
         for i in range(self.num_layers):
-            x, block = self.enc_layers[i](x, img, training, mask)
-            attention_weights['encoder_layer{}_block'.format(i + 1)] = block
+            x = self.enc_layers[i](x, img, training, mask)
 
-        return x, attention_weights  # (batch_size, input_seq_len, d_model)
-
-class CoAttEncoder(tf.keras.layers.Layer):
-    def __init__(self, num_layers, d_model, num_heads, dff,
-                 maximum_position_encoding, pretrained_cnn_type, rate=0.1, multiplier=10):
-        super(CoAttEncoder, self).__init__()
-
-        self.d_model = d_model
-        self.num_layers = num_layers
-        self.maximum_position_encoding = maximum_position_encoding
-
-        # self.embedding = tf.keras.layers.Embedding(input_vocab_size, d_model)
-        self.bilstm = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(512, return_sequences=True))
-        self.question_dense = tf.keras.layers.Dense(d_model)
-        self.pos_encoding = positional_encoding(maximum_position_encoding,
-                                                self.d_model)
-        self.pretrained_CNN = pretrained_cnn(pretrained_cnn_type)
-        self.conv = tf.keras.layers.Conv2D(1024, 3, padding='same', activation='relu')
-        self.image_dense = Dense(d_model, activation='relu')
-        self.fc1 = Dense(maximum_position_encoding * multiplier)
-
-        self.img_enc_layers = [EncoderLayer(d_model, num_heads, dff, rate)
-                           for _ in range(num_layers)]
-        self.qus_enc_layers = [EncoderLayer(d_model, num_heads, dff, rate)
-                           for _ in range(num_layers)]
-
-        self.qus_dropout = tf.keras.layers.Dropout(rate)
-        self.img_dropout = tf.keras.layers.Dropout(rate)
-
-    def call(self, question, img, training, mask):
-        # question
-        seq_len = tf.shape(question)[1]
-        # adding embedding and position encoding.
-        question = self.bilstm(question)
-        question = self.question_dense(question)  # (batch_size, input_seq_len, d_model)
-        question *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
-        question += self.pos_encoding[:, :seq_len, :]
-
-        question = self.qus_dropout(question, training=training)
-
-        # image
-        img_feature = self.pretrained_CNN(img)  # (64, 7, 7, 2048)
-        img_feature = self.conv(img_feature)   # (64, 7, 7, 1024)
-        img_shape = img_feature.shape[-1]     
-        img_feature = tf.keras.layers.Reshape((-1, img_shape))(img_feature)  # (64, 49, 1024)
-        img_feature = self.fc1(img_feature)  # (64, 49, 380)
-        img_feature = tf.transpose(img_feature, perm=(0, 2, 1))  # (64, 380, 49)
-        img_feature = tf.keras.layers.Reshape((self.maximum_position_encoding, -1))(img_feature) # (64, 38, 490)
-        img_feature = self.image_dense(img_feature) # (64, 38, d_model)
-
-        img = self.img_dropout(img_feature, training=training)
-        
-        
-        for i in range(self.num_layers):
-            temp_img = img
-            temp_qus = question
-            img = self.img_enc_layers[i](temp_img, temp_qus, training, mask)
-            question = self.qus_enc_layers[i](temp_qus, temp_img, training, None)
+        return x  # (batch_size, input_seq_len, d_model)
 
 
-        return question, img  # (batch_size, input_seq_len, d_model)
-        
 class BC_Encoder(tf.keras.layers.Layer):
     def __init__(self, num_layers, d_model, num_heads, dff,
                  maximum_position_encoding, rate=0.1):
@@ -284,11 +222,10 @@ class Decoder(tf.keras.layers.Layer):
 
         for i in range(self.num_layers):
             x, block1, block2 = self.dec_layers[i](x, enc_output, training,
-                        look_ahead_mask, padding_mask)
-            attention_weights['decoder_layer{}_block1'.format(i + 1)] = block1
-            attention_weights['decoder_layer{}_block2'.format(i + 1)] = block2
+                                                   look_ahead_mask, padding_mask)
 
-        
+        attention_weights['decoder_layer{}_block1'.format(i + 1)] = block1
+        attention_weights['decoder_layer{}_block2'.format(i + 1)] = block2
 
         # x.shape == (batch_size, target_seq_len, d_model)
         return x, attention_weights
@@ -299,7 +236,7 @@ class Image_Question_Encoder(tf.keras.layers.Layer):
                  rate=0.1 ,pretrained_cnn_type='inception', multiplier = 10):
         super(Image_Question_Encoder, self).__init__()
         self.maximum_position_encoding = maximum_position_encoding
-        self.pretrained_CNN = pretrained_cnn(pretrained_cnn_type)
+        # self.pretrained_CNN = pretrained_cnn(pretrained_cnn_type)
         self.fc1 = Dense(maximum_position_encoding * multiplier)
         self.image_dense = Dense(d_model, activation='relu')
         self.question_encoder = Encoder(
@@ -313,18 +250,18 @@ class Image_Question_Encoder(tf.keras.layers.Layer):
         self.bilstm = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(512, return_sequences=True))
 
     def call(self, question, img, training, mask):
-        img_feature = self.pretrained_CNN(img)  # (64, 7, 7, 2048)
-        img_feature = self.conv(img_feature)   # (64, 7, 7, 1024)
-        img_shape = img_feature.shape[-1]     
-        img_feature = tf.keras.layers.Reshape((-1, img_shape))(img_feature)  # (64, 49, 1024)
-        img_feature = self.fc1(img_feature)  # (64, 49, 380)
+        # img_feature = self.pretrained_CNN(img)  # (64, 7, 7, 2048)
+        # img_feature = self.conv(img_feature)   # (64, 7, 7, 1024)
+        # img_shape = img_feature.shape[-1]     
+        # img_feature = tf.keras.layers.Reshape((-1, img_shape))(img_feature)  # (64, 49, 1024)
+        img_feature = self.fc1(img)  # (64, 10, 380)
         img_feature = tf.transpose(img_feature, perm=(0, 2, 1))  # (64, 380, 49)
         img_feature = tf.keras.layers.Reshape((self.maximum_position_encoding, -1))(img_feature) # (64, 38, 490)
         img_feature = self.image_dense(img_feature)  # (64, 38, 512)
         question = self.bilstm(question)
-        context, attn_weights = self.question_encoder(question, img_feature, training, mask)  # (batch, question_len, 512)
+        context = self.question_encoder(question, img_feature, training, mask)  # (batch, question_len, 512)
         # context = self.concatenator([img_feature, question_feature]) # （batch, 64 + question_len, 512)
-        return context, attn_weights  # (64, 108, 512)
+        return context  # (64, 108, 512)
 
 class Knowledge_Question_Encoder(tf.keras.layers.Layer):
     def __init__(self, num_layers, d_model, num_heads, dff, maximum_position_encoding,
@@ -354,6 +291,6 @@ class Knowledge_Question_Encoder(tf.keras.layers.Layer):
         kn = tf.keras.layers.Reshape((self.maximum_position_encoding, -1))(kn) # (64, 38, 1550)
         kn = self.kn_dense(kn)  # (pe_input, 512) (64, 38, 512)
         #####
-        context, _ = self.question_encoder(question, kn, training, mask)  # (batch, question_len, 512)
+        context = self.question_encoder(question, kn, training, mask)  # (batch, question_len, 512)
         # context = self.concatenator([img_feature, question_feature]) # （batch, 64 + question_len, 512)
         return context  # (64, 108, 512)

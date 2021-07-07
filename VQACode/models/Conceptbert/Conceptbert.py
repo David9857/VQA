@@ -33,7 +33,7 @@ class VQATransformer(tf.keras.Model):
         # cvl_embd = self.cvl_dense(cvl_embd)
         # # (b, nq, dz)
         # cvl_embd = tf.reshape(cvl_embd, [-1, self.nq, self.dz])
-        cvl_embd = tf.concat([question, img],1)
+        cvl_embd = (question + img)/2
         cvl_embd = tf.concat([cvl_embd, kg],1)
         dec_output, attention_weights = self.decoder(
             tar, cvl_embd, training, look_ahead_mask, None) # (batch, targ_len, d_model)

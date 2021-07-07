@@ -20,7 +20,7 @@ class DataLoader:
         self.image_size = image_size
         pic = self.root.joinpath('pic')  # get picture location
         ques = self.root.joinpath('ques_embeddings/' + emb_folder)
-        kn = self.root.joinpath('knowledge_embeddings')
+        # kn = self.root.joinpath('knowledge_embeddings')
 
         # create data frame for yes_no and open-ended questions
         self.dfs = dict()
@@ -34,7 +34,7 @@ class DataLoader:
             df = self.dfs[key]
             df['image'] = df['Images'].map(lambda file: str(pic.joinpath(str(file))) + '.jpg')
             df['question'] = df['Question_Id'].map(lambda file: str(ques.joinpath(str(file))) + '.npy')
-            df['knowlwdge'] = df['Question_Id'].map(lambda file: str(kn.joinpath(str(file))) + '.npy')
+            # df['knowlwdge'] = df['Question_Id'].map(lambda file: str(kn.joinpath(str(file))) + '.npy')
 
     # function for loading images
     def load_and_preprocess_image(self, path):
@@ -81,12 +81,14 @@ class DataLoader:
         ques_ds = ques_path_ds.map(lambda x: tf.numpy_function(self.load_question_features, inp=[x], Tout=tf.float32),
                                    num_parallel_calls=tf.data.experimental.AUTOTUNE)
         ##### create knowledge feature dataset
-        kn_path_ds = tf.data.Dataset.from_tensor_slices(self.dfs[ques_type]['knowlwdge'])
-        kn_ds = kn_path_ds.map(lambda x: tf.numpy_function(self.load_question_features, inp=[x], Tout=tf.float32),
-                                   num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        # kn_path_ds = tf.data.Dataset.from_tensor_slices(self.dfs[ques_type]['knowlwdge'])
+        # kn_ds = kn_path_ds.map(lambda x: tf.numpy_function(self.load_question_features, inp=[x], Tout=tf.float32),
+        #                            num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
         # create answer dataset
         answers = self.dfs[ques_type]['Answers'].map(lambda x: self.process_answer(x))
+        print(type(self.dfs[ques_type]['Answers']))
+        print(self.dfs[ques_type]['Answers'])
         # use tokenizer for string and one-hot mapping, counting vocab, max length
         tokenizer = tf.keras.preprocessing.text.Tokenizer(filters="", oov_token="<unk>", lower=True)
         tokenizer.fit_on_texts(answers)
@@ -98,7 +100,8 @@ class DataLoader:
         ans_ds = tf.data.Dataset.from_tensor_slices(answers)
         print('11111')
 
-        return tf.data.Dataset.zip(((image_ds, ques_ds, kn_ds), ans_ds, ques_id_ds)), tokenizer
+        # return tf.data.Dataset.zip(((image_ds, ques_ds, kn_ds), ans_ds, ques_id_ds)), tokenizer
+        return tf.data.Dataset.zip(((image_ds, ques_ds), ans_ds, ques_id_ds)), tokenizer
 
 
 class ClefDataLoader:
